@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  scraper:
+    build: .
+    container_name: selenium_scraper
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    shm_size: '1gb'  # Important pour éviter les erreurs Chromium dans Docker
