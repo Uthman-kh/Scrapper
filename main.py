@@ -16,6 +16,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 URL = "https://juriscassation.cspj.ma/ArretAppels/SearchArretAppel"
 OUTPUT_CSV = "resultats_table.csv"
+TARGET_PAGE = 120  # Définir la page cible
 
 
 def wait_for_table(driver):
@@ -27,18 +28,22 @@ def wait_for_table(driver):
     return table
 
 
-def extract_table_data(table):
-    # Extrait en-têtes et lignes
+def extract_table_data(driver, table):
+    # Extrait en-têtes
     headers = [th.text.strip() for th in table.find_elements(By.CSS_SELECTOR, 'thead th')]
     rows = []
     for tr in table.find_elements(By.CSS_SELECTOR, 'tbody tr'):
-        cells = [td.text.strip() for td in tr.find_elements(By.TAG_NAME, 'td')]
-        if cells:
-            rows.append(cells)
+        try:
+            cells = [td.text.strip() for td in tr.find_elements(By.TAG_NAME, 'td')]
+            if cells:
+                rows.append(cells)
+        except StaleElementReferenceException:
+            print("⚠️ Élément de ligne devenu obsolète lors de l'extraction des cellules.")
+            continue  # Passer à la ligne suivante
     return headers, rows
 
 
-def fetch_all_pages(driver, url):
+def fetch_all_pages(driver, url, target_page):
     driver.get(url)
     wait = WebDriverWait(driver, 30)
 
@@ -53,7 +58,7 @@ def fetch_all_pages(driver, url):
 
     # Étape 2 : Clic sur "بحث"
     try:
-        search_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'بحث')]") ))
+        search_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'بحث')]")))
         driver.execute_script("arguments[0].click();", search_btn)
         print("✅ Bouton 'بحث' cliqué.")
     except Exception:
@@ -62,28 +67,25 @@ def fetch_all_pages(driver, url):
     # Scraper page 1
     print("📄 Scraping page 1...")
     table = wait_for_table(driver)
-    headers, all_rows = extract_table_data(table)
+    headers, all_rows = extract_table_data(driver, table)
 
     # Pagination par clic sur la flèche "suivant"
     page = 2
-    while True:
+    while page <= target_page:
         try:
             # Trouver le bouton '>' de pagination
-            next_btn = driver.find_element(By.CSS_SELECTOR, 'li.PagedList-skipToNext a[rel="next"]')
+            next_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'li.PagedList-skipToNext a[rel="next"]')))
             driver.execute_script("arguments[0].click();", next_btn)
             print(f"➡️ Passage à la page {page}...")
             time.sleep(1)  # pause pour l'AJAX
-            # Gérer stale elements
-            try:
-                table = wait_for_table(driver)
-            except StaleElementReferenceException:
-                time.sleep(1)
-                table = wait_for_table(driver)
-            _, rows = extract_table_data(table)
+
+            # Récupérer le tableau frais après la navigation
+            table = wait_for_table(driver)
+            _, rows = extract_table_data(driver, table)
             all_rows.extend(rows)
             page += 1
-        except NoSuchElementException:
-            print("✅ Toutes les pages ont été scrappées.")
+        except (NoSuchElementException, TimeoutException):
+            print(f"🛑 Le bouton 'suivant' n'est plus trouvé à la page {page-1} ou le chargement a pris trop de temps.")
             break
 
     return headers, all_rows
@@ -108,7 +110,7 @@ if __name__ == '__main__':
     driver.maximize_window()
 
     try:
-        headers, rows = fetch_all_pages(driver, URL)
+        headers, rows = fetch_all_pages(driver, URL, TARGET_PAGE)
         if not rows:
             raise ValueError("❌ Aucune donnée récupérée.")
         write_csv(OUTPUT_CSV, headers, rows)
