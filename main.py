@@ -29,18 +29,22 @@ def wait_for_table(driver):
 
 
 def extract_table_data(driver, table):
-    # Extrait en-têtes
-    headers = [th.text.strip() for th in table.find_elements(By.CSS_SELECTOR, 'thead th')]
     rows = []
-    for tr in table.find_elements(By.CSS_SELECTOR, 'tbody tr'):
-        try:
-            cells = [td.text.strip() for td in tr.find_elements(By.TAG_NAME, 'td')]
-            if cells:
-                rows.append(cells)
-        except StaleElementReferenceException:
-            print("⚠️ Élément de ligne devenu obsolète lors de l'extraction des cellules.")
-            continue  # Passer à la ligne suivante
-    return headers, rows
+    try:
+        # Extract headers *each time* the function is called with a fresh table
+        headers = [th.text.strip() for th in table.find_elements(By.CSS_SELECTOR, 'thead th')]
+        for tr in table.find_elements(By.CSS_SELECTOR, 'tbody tr'):
+            try:
+                cells = [td.text.strip() for td in tr.find_elements(By.TAG_NAME, 'td')]
+                if cells:
+                    rows.append(cells)
+            except StaleElementReferenceException:
+                print("⚠️ Élément de ligne devenu obsolète lors de l'extraction des cellules.")
+                continue  # Passer à la ligne suivante
+        return headers, rows
+    except StaleElementReferenceException:
+        print("⚠️ Les en-têtes du tableau sont devenus obsolètes.")
+        return [], []  # Return empty lists if headers are stale
 
 
 def fetch_all_pages(driver, url, target_page):
@@ -64,28 +68,28 @@ def fetch_all_pages(driver, url, target_page):
     except Exception:
         raise RuntimeError("❌ Impossible de cliquer sur 'بحث'.")
 
-    # Scraper page 1
-    print("📄 Scraping page 1...")
-    table = wait_for_table(driver)
-    headers, all_rows = extract_table_data(driver, table)
-
-    # Pagination par clic sur la flèche "suivant"
-    page = 2
-    while page <= target_page:
+    all_rows = []
+    headers = []
+    for page in range(1, target_page + 1):
+        print(f"📄 Scraping page {page}...")
         try:
-            # Trouver le bouton '>' de pagination
-            next_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'li.PagedList-skipToNext a[rel="next"]')))
-            driver.execute_script("arguments[0].click();", next_btn)
-            print(f"➡️ Passage à la page {page}...")
-            time.sleep(1)  # pause pour l'AJAX
-
-            # Récupérer le tableau frais après la navigation
             table = wait_for_table(driver)
-            _, rows = extract_table_data(driver, table)
-            all_rows.extend(rows)
-            page += 1
-        except (NoSuchElementException, TimeoutException):
-            print(f"🛑 Le bouton 'suivant' n'est plus trouvé à la page {page-1} ou le chargement a pris trop de temps.")
+            current_headers, current_rows = extract_table_data(driver, table)
+            if page == 1:
+                headers = current_headers
+            all_rows.extend(current_rows)
+
+            if page < target_page:
+                try:
+                    next_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'li.PagedList-skipToNext a[rel="next"]')))
+                    driver.execute_script("arguments[0].click();", next_btn)
+                    print(f"➡️ Passage à la page {page + 1}...")
+                    time.sleep(1)  # Allow time for the page to update
+                except (NoSuchElementException, TimeoutException):
+                    print(f"🛑 Le bouton 'suivant' n'est plus trouvé à la page {page} ou le chargement a pris trop de temps.")
+                    break
+        except (NoSuchElementException, TimeoutException, StaleElementReferenceException) as e:
+            print(f"❌ Erreur lors du scraping de la page {page}: {e}")
             break
 
     return headers, all_rows
